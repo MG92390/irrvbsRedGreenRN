@@ -261,7 +261,10 @@ export default function App() {
               return (
                 <Pressable
                   key={list.id}
-                  onPress={() => setSelectedList(list.id)}
+                  onPress={() => {
+                    if (active) startRound(list.id);
+                    else setSelectedList(list.id);
+                  }}
                   style={[styles.listCard, active && styles.listCardActive]}
                 >
                   <View style={styles.listCardTop}>
@@ -313,18 +316,20 @@ export default function App() {
           </View>
           <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.min(100, progress * 100)}%` }]} /></View>
           <View style={styles.quizMeta}><Text style={styles.quizMetaLabel}>QUESTION {String(questionIndex + 1).padStart(2, '0')}</Text><Text style={styles.quizScore}>{score} PTS</Text></View>
-          <View style={styles.questionBlock}>
-            <Text style={styles.questionPrompt}>Comment dit-on</Text>
-            <Text style={styles.questionWord}>{currentVerb.french}</Text>
-            <Text style={styles.questionHint}>en anglais ?</Text>
-          </View>
-          <View style={styles.options}>
-            {choices.map((choice, index) => (
-              <Pressable key={`${questionIndex}-${choice.key}`} style={styles.optionButton} onPress={() => chooseAnswer(choice)}>
-                <Text style={styles.optionIndex}>{String.fromCharCode(65 + index)}</Text>
-                <Text style={styles.optionText}>{choice.label}</Text>
-              </Pressable>
-            ))}
+            <View style={styles.quizBody}>
+            <View style={styles.questionBlock}>
+              <Text style={styles.questionPrompt}>Comment dit-on</Text>
+              <Text style={styles.questionWord}>{currentVerb.french}</Text>
+              <Text style={styles.questionHint}>en anglais ?</Text>
+            </View>
+              <View style={styles.options}>
+                {choices.map((choice, index) => (
+                  <Pressable key={`${questionIndex}-${choice.key}`} style={styles.optionButton} onPress={() => chooseAnswer(choice)}>
+                    <Text style={styles.optionIndex}>{String.fromCharCode(65 + index)}</Text>
+                    <Text style={styles.optionText}>{choice.label}</Text>
+                  </Pressable>
+                ))}
+              </View>
           </View>
           <View style={styles.quizFooter}><Text style={styles.quizFooterLabel}>BONNE RÉPONSE</Text><Text style={styles.pointsLegend}>‹1s  +5  ·  ‹1,2s  +3  ·  ‹1,4s  +2  ·  ‹5s  +1</Text></View>
         </View>
@@ -412,7 +417,8 @@ const styles = StyleSheet.create({
   quizMeta: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 25 },
   quizMetaLabel: { color: COLORS.muted, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
   quizScore: { color: COLORS.green, fontSize: 10, fontWeight: '900', letterSpacing: 1 },
-  questionBlock: { flex: 1, minHeight: 174, justifyContent: 'center', alignItems: 'center' },
+  quizBody: { flex: 1, width: '100%', maxWidth: 520, alignSelf: 'center', justifyContent: 'center' },
+  questionBlock: { minHeight: 148, justifyContent: 'center', alignItems: 'center' },
   questionPrompt: { color: COLORS.muted, fontSize: 16 },
   questionWord: { marginTop: 5, color: COLORS.ink, fontSize: 36, lineHeight: 43, fontWeight: '900', textAlign: 'center' },
   questionHint: { marginTop: 4, color: COLORS.green, fontSize: 15, fontWeight: '700' },
