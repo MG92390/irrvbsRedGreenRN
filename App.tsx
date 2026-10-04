@@ -85,7 +85,7 @@ function listName(id: number): string {
 }
 
 export default function App() {
-  const [screen, setScreen] = useState<'home' | 'quiz' | 'result'>('home');
+  const [screen, setScreen] = useState<'home' | 'quiz' | 'revision' | 'result'>('home');
   const [selectedList, setSelectedList] = useState(1);
   const [stats, setStats] = useState<Stats>({});
   const [bestScores, setBestScores] = useState<BestScores>({});
@@ -281,6 +281,14 @@ export default function App() {
             })}
           </View>
 
+          <Pressable style={styles.startButton} onPress={() => startRound(selectedList)}>
+            <Text style={styles.startButtonText}>Lancer le quiz · liste {String(selectedList).padStart(2, '0')}</Text>
+            <Text style={styles.startButtonArrow}>→</Text>
+          </Pressable>
+          <Pressable style={styles.secondaryButton} onPress={() => setScreen('revision')}>
+            <Text style={styles.secondaryButtonText}>Réviser les verbes</Text>
+          </Pressable>
+
           <View style={styles.statsSection}>
             <View style={styles.sectionHeading}>
               <View><Text style={styles.sectionTitle}>Tes réflexes</Text><Text style={styles.sectionSubtitle}>Temps moyen et réussite par verbe</Text></View>
@@ -298,10 +306,6 @@ export default function App() {
             })}
           </View>
 
-          <Pressable style={styles.startButton} onPress={() => startRound(selectedList)}>
-            <Text style={styles.startButtonText}>Lancer la liste {String(selectedList).padStart(2, '0')}</Text>
-            <Text style={styles.startButtonArrow}>→</Text>
-          </Pressable>
           <Text style={styles.footerText}>30 SECONDES · 4 PROPOSITIONS</Text>
         </ScrollView>
       )}
@@ -331,6 +335,35 @@ export default function App() {
           </View>
           <View style={styles.quizFooter}><Text style={styles.quizFooterLabel}>BONNE RÉPONSE</Text><Text style={styles.pointsLegend}>‹1s  +5  ·  ‹1,2s  +3  ·  ‹1,4s  +2  ·  ‹5s  +1</Text></View>
         </View>
+      )}
+
+      {screen === 'revision' && (
+        <ScrollView contentContainerStyle={styles.revisionScreen} showsVerticalScrollIndicator={false}>
+          <View style={styles.revisionHeader}>
+            <Pressable style={styles.backButton} onPress={() => setScreen('home')}><Text style={styles.backGlyph}>‹</Text></Pressable>
+            <View style={styles.quizHeaderLabel}>
+              <Text style={styles.brand}>RÉVISION · LISTE {String(selectedList).padStart(2, '0')}</Text>
+              <Text style={styles.quizSubhead}>{listName(selectedList)}</Text>
+            </View>
+          </View>
+          <Text style={styles.revisionTitle}>Les verbes</Text>
+          <View style={styles.revisionTable}>
+            <View style={[styles.revisionTableRow, styles.revisionTableHeader]}>
+              <View style={[styles.revisionCell, styles.revisionFrenchCell]}><Text style={styles.revisionHeaderText}>TRADUCTION</Text></View>
+              <View style={[styles.revisionCell, styles.revisionVerbCell]}><Text style={styles.revisionHeaderText}>BASE{ '\n' }VERBALE</Text></View>
+              <View style={[styles.revisionCell, styles.revisionVerbCell]}><Text style={styles.revisionHeaderText}>PRÉTÉRIT</Text></View>
+              <View style={[styles.revisionCell, styles.revisionVerbCell, styles.revisionLastCell]}><Text style={styles.revisionHeaderText}>PARTICIPE{ '\n' }PASSÉ</Text></View>
+            </View>
+            {listVerbs.map((verb, index) => (
+              <View key={verb.id} style={[styles.revisionTableRow, index % 2 === 1 && styles.revisionAlternateRow]}>
+                <View style={[styles.revisionCell, styles.revisionFrenchCell]}><Text style={styles.revisionFrench}>{verb.french}</Text></View>
+                <View style={[styles.revisionCell, styles.revisionVerbCell]}><Text style={styles.revisionForm}>{verb.base}</Text></View>
+                <View style={[styles.revisionCell, styles.revisionVerbCell]}><Text style={styles.revisionForm}>{verb.past}</Text></View>
+                <View style={[styles.revisionCell, styles.revisionVerbCell, styles.revisionLastCell]}><Text style={styles.revisionForm}>{verb.participle}</Text></View>
+              </View>
+            ))}
+          </View>
+        </ScrollView>
       )}
 
       {screen === 'result' && (
@@ -446,4 +479,18 @@ const styles = StyleSheet.create({
   reviewForms: { marginTop: 4, color: COLORS.ink, fontSize: 12 },
   secondaryButton: { minHeight: 50, marginTop: 9, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: COLORS.line },
   secondaryButtonText: { color: COLORS.ink, fontSize: 13, fontWeight: '800' },
+  revisionScreen: { flexGrow: 1, paddingHorizontal: 22, paddingTop: 12, paddingBottom: 32 },
+  revisionHeader: { flexDirection: 'row', alignItems: 'center', minHeight: 60 },
+  revisionTitle: { marginTop: 25, marginBottom: 16, color: COLORS.ink, fontSize: 28, fontWeight: '900' },
+  revisionTable: { width: '100%', borderWidth: 1, borderColor: COLORS.line, backgroundColor: COLORS.white },
+  revisionTableRow: { minHeight: 48, flexDirection: 'row', borderBottomWidth: 1, borderBottomColor: COLORS.line },
+  revisionTableHeader: { minHeight: 52, backgroundColor: COLORS.green, borderBottomWidth: 0 },
+  revisionAlternateRow: { backgroundColor: '#F0F2EB' },
+  revisionCell: { paddingHorizontal: 6, paddingVertical: 10, justifyContent: 'center', borderRightWidth: 1, borderRightColor: COLORS.line },
+  revisionFrenchCell: { width: '28%' },
+  revisionVerbCell: { width: '24%' },
+  revisionLastCell: { borderRightWidth: 0 },
+  revisionHeaderText: { color: COLORS.white, fontSize: 8, lineHeight: 11, fontWeight: '900', textAlign: 'left' },
+  revisionFrench: { color: COLORS.green, fontSize: 12, lineHeight: 16, fontWeight: '800' },
+  revisionForm: { color: COLORS.ink, fontSize: 12, lineHeight: 16, fontWeight: '600' },
 });
