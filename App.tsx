@@ -135,9 +135,9 @@ export default function App() {
   useEffect(() => {
     if (screen !== 'quiz') return;
     const interval = setInterval(() => {
-      const left = Math.max(0, roundEndsAt.current - Date.now());
-      setRemainingMs(left);
-      if (left === 0) finishRound.current();
+      const timeLeft = Math.max(0, roundEndsAt.current - Date.now());
+      setRemainingMs(timeLeft);
+      if (timeLeft === 0) finishRound.current();
       else if (!answered.current && Date.now() - startedAt.current >= QUESTION_MS) {
         answered.current = true;
         const missedVerb = deck[questionIndex];
@@ -225,7 +225,6 @@ export default function App() {
     advanceQuestion.current();
   }
 
-  const secondsLeft = Math.ceil(remainingMs / 1000);
   const progress = 1 - remainingMs / ROUND_MS;
   const listVerbs = verbs.filter((verb) => verb.list === selectedList);
   const meanTime = (verb: Verb) => {
@@ -274,8 +273,8 @@ export default function App() {
                   <Text style={[styles.listTitle, active && styles.listTitleActive]}>{list.title}</Text>
                   <View style={styles.listScores}>
                     <View style={styles.listScore}><Text style={styles.listScoreLabel}>ATTENDU</Text><Text style={styles.listScoreValue}>{list.expectedScore ?? '—'}</Text></View>
-                    <View style={styles.listScore}><Text style={styles.listScoreLabel}>TON RECORD</Text><Text style={styles.listScoreValue}>{bestScores[list.id] ?? '—'}</Text></View>
-                    <View style={styles.listScore}><Text style={styles.listScoreLabel}>GLOBAL</Text><Text style={styles.listScoreValue}>—</Text></View>
+                    <View style={styles.listScore}><Text style={[styles.listScoreLabel, styles.personalRecordLabel]}>TON RECORD</Text><Text style={styles.listScoreValue}>{bestScores[list.id] ?? '—'}</Text></View>
+                    <View style={styles.listScore}><Text style={styles.listScoreLabel}>CLASSEMENT</Text><Text style={styles.listScoreValue}>—</Text></View>
                   </View>
                 </Pressable>
               );
@@ -303,7 +302,7 @@ export default function App() {
             <Text style={styles.startButtonText}>Lancer la liste {String(selectedList).padStart(2, '0')}</Text>
             <Text style={styles.startButtonArrow}>→</Text>
           </Pressable>
-          <Text style={styles.footerText}>30 SECONDES · 4 PROPOSITIONS · UN MAX DE RÉFLEXES</Text>
+          <Text style={styles.footerText}>30 SECONDES · 4 PROPOSITIONS</Text>
         </ScrollView>
       )}
 
@@ -312,7 +311,6 @@ export default function App() {
           <View style={styles.quizHeader}>
             <Pressable style={styles.backButton} onPress={() => setScreen('home')}><Text style={styles.backGlyph}>‹</Text></Pressable>
             <View style={styles.quizHeaderLabel}><Text style={styles.brand}>LISTE {String(selectedList).padStart(2, '0')}</Text><Text style={styles.quizSubhead}>{listName(selectedList)}</Text></View>
-            <View style={styles.timerBadge}><Text style={[styles.timerValue, secondsLeft <= 5 && styles.timerUrgent]}>{String(secondsLeft).padStart(2, '0')}</Text><Text style={styles.timerUnit}>SEC</Text></View>
           </View>
           <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.min(100, progress * 100)}%` }]} /></View>
           <View style={styles.quizMeta}><Text style={styles.quizMetaLabel}>QUESTION {String(questionIndex + 1).padStart(2, '0')}</Text><Text style={styles.quizScore}>{score} PTS</Text></View>
@@ -389,6 +387,7 @@ const styles = StyleSheet.create({
   listScores: { flexDirection: 'row', marginTop: 12, paddingTop: 9, borderTopWidth: 1, borderTopColor: COLORS.line },
   listScore: { flex: 1 },
   listScoreLabel: { color: COLORS.muted, fontSize: 7, fontWeight: '900' },
+  personalRecordLabel: { marginLeft: -3 },
   listScoreValue: { marginTop: 3, color: COLORS.ink, fontSize: 14, fontWeight: '900' },
   listArrow: { color: COLORS.green, fontSize: 16, fontWeight: '900' },
   statsSection: { marginTop: 12 },
@@ -408,10 +407,6 @@ const styles = StyleSheet.create({
   backGlyph: { marginTop: -4, color: COLORS.ink, fontSize: 32, lineHeight: 36 },
   quizHeaderLabel: { flex: 1, marginLeft: 12 },
   quizSubhead: { marginTop: 3, color: COLORS.muted, fontSize: 11 },
-  timerBadge: { width: 54, height: 54, backgroundColor: COLORS.lime, alignItems: 'center', justifyContent: 'center' },
-  timerValue: { color: COLORS.ink, fontSize: 23, lineHeight: 25, fontWeight: '900' },
-  timerUrgent: { color: COLORS.red },
-  timerUnit: { color: COLORS.ink, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
   progressTrack: { height: 4, marginTop: 11, backgroundColor: COLORS.line },
   progressFill: { height: 4, backgroundColor: COLORS.green },
   quizMeta: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 25 },
@@ -420,7 +415,7 @@ const styles = StyleSheet.create({
   quizBody: { flex: 1, width: '100%', maxWidth: 520, alignSelf: 'center', justifyContent: 'center' },
   questionBlock: { minHeight: 148, justifyContent: 'center', alignItems: 'center' },
   questionPrompt: { color: COLORS.muted, fontSize: 16 },
-  questionWord: { marginTop: 5, color: COLORS.ink, fontSize: 36, lineHeight: 43, fontWeight: '900', textAlign: 'center' },
+  questionWord: { width: '100%', marginTop: 5, color: COLORS.ink, fontSize: 36, lineHeight: 43, fontWeight: '900', textAlign: 'center' },
   questionHint: { marginTop: 4, color: COLORS.green, fontSize: 15, fontWeight: '700' },
   options: { gap: 9 },
   optionButton: { minHeight: 61, paddingHorizontal: 12, borderWidth: 1, borderColor: COLORS.line, backgroundColor: COLORS.white, flexDirection: 'row', alignItems: 'center' },
