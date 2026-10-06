@@ -4,10 +4,27 @@
     "slug": "irrvbsredgreenReactNative",
     "version": "1.0.0",
     "orientation": "portrait",
+    "plugins": [
+      [
+        "expo-speech-recognition",
+        {
+          "microphonePermission": "Autoriser Verb Club à utiliser le microphone pour les réponses orales.",
+          "speechRecognitionPermission": "Autoriser Verb Club à reconnaître les réponses en anglais.",
+          "androidSpeechServicePackages": [
+            "com.google.android.googlequicksearchbox",
+            "com.google.android.tts"
+          ]
+        }
+      ]
+    ],
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "NSSpeechRecognitionUsageDescription": "Autoriser Verb Club à reconnaître les réponses en anglais.",
+        "NSMicrophoneUsageDescription": "Autoriser Verb Club à utiliser le microphone pour les réponses orales."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -16,7 +33,11 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
+      "package": "com.saru92390.irrvbsredgreenReactNative"
     },
     "web": {
       "favicon": "./assets/favicon.png"

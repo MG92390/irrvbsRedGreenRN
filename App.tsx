@@ -1,6 +1,10 @@
 import { StatusBar } from 'expo-status-bar';
 import { useEffect, useRef, useState } from 'react';
 import {
+  ExpoSpeechRecognitionModule,
+  useSpeechRecognitionEvent,
+} from 'expo-speech-recognition';
+import {
   Pressable,
   SafeAreaView,
   ScrollView,
@@ -35,8 +39,15 @@ const COLORS = {
   paleRed: '#F8E8E4',
 };
 
-type Choice = { key: string; label: string; isCorrect: boolean };
-type Mistake = { french: string; answer: string; correct: string };
+type RoundAnswer = {
+  french: string;
+  answer: string;
+  correct: string;
+  isCorrect: boolean;
+  matchedForms: number;
+  pointsEarned: number;
+  responseMs: number;
+};
 
 function shuffle<T>(items: T[]): T[] {
   const result = [...items];
@@ -53,19 +64,88 @@ function makeDeck(pool: Verb[]): Verb[] {
   return deck;
 }
 
-function makeChoices(answer: Verb): Choice[] {
-  const correctForms = getForms(answer);
-  const listForms = verbs.filter((verb) => verb.list === answer.list).map(getForms);
-  const uniqueForms = [...new Set(listForms)].filter((forms) => forms !== correctForms);
-  const distractors = shuffle(uniqueForms).slice(0, 3);
-  return shuffle([
-    { key: answer.id, label: correctForms, isCorrect: true },
-    ...distractors.map((forms) => ({
-      key: forms,
-      label: forms,
-      isCorrect: false,
-    })),
-  ]);
+function recognitionContextFor(verb: Verb | undefined): string[] {
+  if (!verb) return [];
+  return [verb.base, verb.past, verb.participle]
+    .flatMap((form) => form.split('/'))
+    .map((form) => form.trim())
+    .filter(Boolean);
+}
+
+function phoneticKey(word: string): string {
+  return word
+    .toLocaleLowerCase('en-US')
+    .replace(/[aeiou]/g, 'a')
+    .replace(/[dt]/g, 't')
+    .replace(/[cqk]/g, 'k')
+    .replace(/(.)\1+/g, '$1');
+}
+
+function isCloseSpokenWord(spoken: string, expected: string): boolean {
+  if (spoken === expected) return true;
+  const spokenKey = phoneticKey(spoken);
+  const expectedKey = phoneticKey(expected);
+  if (spokenKey === expectedKey) return true;
+  if (Math.abs(spokenKey.length - expectedKey.length) > 1) return false;
+  if (Math.min(spokenKey.length, expectedKey.length) < 5) return false;
+
+  let differences = 0;
+  let spokenIndex = 0;
+  let expectedIndex = 0;
+  while (spokenIndex < spokenKey.length && expectedIndex < expectedKey.length) {
+    if (spokenKey[spokenIndex] === expectedKey[expectedIndex]) {
+      spokenIndex += 1;
+      expectedIndex += 1;
+    } else {
+      differences += 1;
+      if (differences > 1) return false;
+      if (spokenKey.length > expectedKey.length) spokenIndex += 1;
+      else if (expectedKey.length > spokenKey.length) expectedIndex += 1;
+      else {
+        spokenIndex += 1;
+        expectedIndex += 1;
+      }
+    }
+  }
+
+  return differences + (spokenIndex < spokenKey.length || expectedIndex < expectedKey.length ? 1 : 0) <= 1;
+}
+
+function matchedFormsInTranscript(transcript: string, verb: Verb): number {
+  const words = (value: string) =>
+    value
+      .toLocaleLowerCase('en-US')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(Boolean);
+  const spokenWords = words(transcript);
+  let nextWordIndex = 0;
+
+  let matchedForms = 0;
+  for (const form of [verb.base, verb.past, verb.participle]) {
+    const alternatives = form.split('/').map((alternative) => words(alternative.trim()));
+    let match: { index: number; length: number } | undefined;
+
+    for (let index = nextWordIndex; index < spokenWords.length && !match; index += 1) {
+      for (const alternative of alternatives) {
+        if (alternative.every((word, offset) => {
+          const spokenWord = spokenWords[index + offset];
+          return spokenWord !== undefined && isCloseSpokenWord(spokenWord, word);
+        })) {
+          match = { index, length: alternative.length };
+          break;
+        }
+      }
+    }
+
+    if (!match) break;
+    matchedForms += 1;
+    nextWordIndex = match.index + match.length;
+  }
+
+  return matchedForms;
 }
 
 function formatTime(milliseconds: number): string {
@@ -91,20 +171,76 @@ export default function App() {
   const [bestScores, setBestScores] = useState<BestScores>({});
   const [deck, setDeck] = useState<Verb[]>([]);
   const [questionIndex, setQuestionIndex] = useState(0);
-  const [choices, setChoices] = useState<Choice[]>([]);
   const [remainingMs, setRemainingMs] = useState(ROUND_MS);
+  const [questionRemainingMs, setQuestionRemainingMs] = useState(QUESTION_MS);
   const [score, setScore] = useState(0);
   const [answeredCount, setAnsweredCount] = useState(0);
   const [correctCount, setCorrectCount] = useState(0);
-  const [mistakes, setMistakes] = useState<Mistake[]>([]);
-  const [feedback, setFeedback] = useState<'correct' | 'wrong' | null>(null);
+  const [roundAnswers, setRoundAnswers] = useState<RoundAnswer[]>([]);
+  const [feedback, setFeedback] = useState<'correct' | 'partial' | 'wrong' | null>(null);
+  const [transcript, setTranscript] = useState('');
+  const [isListening, setIsListening] = useState(false);
+  const [speechPermissionGranted, setSpeechPermissionGranted] = useState(false);
+  const [speechError, setSpeechError] = useState('');
   const statsRef = useRef<Stats>({});
   const startedAt = useRef(0);
   const roundEndsAt = useRef(0);
+  const transcriptRef = useRef('');
+  const finalTranscriptRef = useRef('');
   const answered = useRef(false);
   const roundFinished = useRef(false);
   const advanceQuestion = useRef<() => void>(() => undefined);
   const finishRound = useRef<() => void>(() => undefined);
+  const currentVerb = deck[questionIndex];
+  const currentVerbRef = useRef<Verb | undefined>(currentVerb);
+
+  useSpeechRecognitionEvent('start', () => {
+    setIsListening(true);
+    setSpeechError('');
+  });
+  useSpeechRecognitionEvent('end', () => setIsListening(false));
+  useSpeechRecognitionEvent('error', (event) => {
+    setIsListening(false);
+    if (event.error !== 'aborted' && event.error !== 'no-speech') {
+      setSpeechError('La reconnaissance vocale est indisponible. Vérifie les autorisations et le service vocal du téléphone.');
+    }
+  });
+  useSpeechRecognitionEvent('result', (event) => {
+    const segment = event.results[0]?.transcript ?? '';
+    const recognized = [finalTranscriptRef.current, segment].filter(Boolean).join(' ');
+    if (event.isFinal) finalTranscriptRef.current = recognized;
+    transcriptRef.current = recognized;
+    setTranscript(recognized);
+    if (screen !== 'quiz' || answered.current || !currentVerbRef.current || Date.now() >= roundEndsAt.current) return;
+
+    const responseMs = Date.now() - startedAt.current;
+    if (responseMs > QUESTION_MS) return;
+    const verb = currentVerbRef.current;
+    const matchedForms = matchedFormsInTranscript(recognized, verb);
+    if (matchedForms < 3) return;
+
+    answered.current = true;
+    ExpoSpeechRecognitionModule.abort();
+    setAnsweredCount((count) => count + 1);
+    const pointsEarned = pointsFor(responseMs);
+    setCorrectCount((count) => count + 1);
+    setScore((current) => current + pointsEarned);
+    setRoundAnswers((current) => [
+      ...current,
+      {
+        french: verb.french,
+        answer: getForms(verb),
+        correct: getForms(verb),
+        isCorrect: true,
+        matchedForms,
+        pointsEarned,
+        responseMs,
+      },
+    ]);
+    setFeedback('correct');
+    recordAttempt(verb, true, responseMs);
+    advanceQuestion.current();
+  });
 
   useEffect(() => {
     loadStats().then((saved) => {
@@ -121,27 +257,39 @@ export default function App() {
     saveStats(updated).catch(() => undefined);
   }
 
-  function missQuestion(verb: Verb) {
-    setAnsweredCount((count) => count + 1);
-    recordAttempt(verb, false, null);
-    setMistakes((current) => [
-      ...current,
-      { french: verb.french, answer: 'Pas de réponse', correct: getForms(verb) },
-    ]);
-    setFeedback('wrong');
-    advanceQuestion.current();
-  }
-
   useEffect(() => {
     if (screen !== 'quiz') return;
     const interval = setInterval(() => {
       const timeLeft = Math.max(0, roundEndsAt.current - Date.now());
       setRemainingMs(timeLeft);
+      const questionTimeLeft = Math.max(0, QUESTION_MS - (Date.now() - startedAt.current));
+      setQuestionRemainingMs(questionTimeLeft);
       if (timeLeft === 0) finishRound.current();
-      else if (!answered.current && Date.now() - startedAt.current >= QUESTION_MS) {
+      else if (!answered.current && questionTimeLeft === 0) {
         answered.current = true;
+        ExpoSpeechRecognitionModule.abort();
         const missedVerb = deck[questionIndex];
-        if (missedVerb) missQuestion(missedVerb);
+        if (missedVerb) {
+          const matchedForms = matchedFormsInTranscript(transcriptRef.current, missedVerb);
+          const pointsEarned = matchedForms;
+          if (pointsEarned > 0) setScore((current) => current + pointsEarned);
+          setRoundAnswers((current) => [
+            ...current,
+            {
+              french: missedVerb.french,
+              answer: transcriptRef.current || 'Pas de réponse',
+              correct: getForms(missedVerb),
+              isCorrect: false,
+              matchedForms,
+              pointsEarned,
+              responseMs: QUESTION_MS,
+            },
+          ]);
+          setAnsweredCount((count) => count + 1);
+          recordAttempt(missedVerb, false, transcriptRef.current ? QUESTION_MS : null);
+          setFeedback(pointsEarned > 0 ? 'partial' : 'wrong');
+          advanceQuestion.current();
+        }
       }
     }, 50);
     return () => clearInterval(interval);
@@ -153,16 +301,50 @@ export default function App() {
     return () => clearTimeout(timeout);
   }, [feedback]);
 
-  const currentVerb = deck[questionIndex];
+  useEffect(() => {
+    if (screen !== 'quiz' || !speechPermissionGranted || roundFinished.current) return;
+
+    try {
+      ExpoSpeechRecognitionModule.start({
+        lang: 'en-US',
+        interimResults: true,
+        continuous: true,
+        maxAlternatives: 1,
+        contextualStrings: recognitionContextFor(currentVerb),
+        androidIntentOptions: { EXTRA_LANGUAGE_MODEL: 'web_search' },
+      });
+    } catch {
+      setTimeout(() => setSpeechError('Impossible de démarrer la reconnaissance vocale sur cet appareil.'), 0);
+    }
+
+    return () => {
+      ExpoSpeechRecognitionModule.abort();
+    };
+  }, [screen, questionIndex, speechPermissionGranted]);
 
   function showQuestion(index: number, questionDeck: Verb[]) {
     setQuestionIndex(index);
-    setChoices(makeChoices(questionDeck[index]));
+    currentVerbRef.current = questionDeck[index];
     startedAt.current = Date.now();
+    transcriptRef.current = '';
+    finalTranscriptRef.current = '';
+    setTranscript('');
+    setQuestionRemainingMs(QUESTION_MS);
     answered.current = false;
   }
 
-  function startRound(listId: number) {
+  async function startRound(listId: number) {
+    if (!ExpoSpeechRecognitionModule.isRecognitionAvailable()) {
+      setSpeechError('La reconnaissance vocale anglaise n’est pas disponible sur cet appareil.');
+      return;
+    }
+    const permission = await ExpoSpeechRecognitionModule.requestPermissionsAsync();
+    if (!permission.granted) {
+      setSpeechError('Autorise l’accès au microphone et à la reconnaissance vocale pour jouer à l’oral.');
+      return;
+    }
+    setSpeechPermissionGranted(true);
+    setSpeechError('');
     const pool = verbs.filter((verb) => verb.list === listId);
     const nextDeck = makeDeck(pool);
     setSelectedList(listId);
@@ -170,8 +352,12 @@ export default function App() {
     setScore(0);
     setAnsweredCount(0);
     setCorrectCount(0);
-    setMistakes([]);
+    setRoundAnswers([]);
     setRemainingMs(ROUND_MS);
+    setQuestionRemainingMs(QUESTION_MS);
+    transcriptRef.current = '';
+    finalTranscriptRef.current = '';
+    setTranscript('');
     setFeedback(null);
     roundFinished.current = false;
     roundEndsAt.current = Date.now() + ROUND_MS;
@@ -200,32 +386,8 @@ export default function App() {
     saveBestScore(selectedList, score).then(setBestScores).catch(() => undefined);
   };
 
-  function chooseAnswer(choice: Choice) {
-    if (answered.current || !currentVerb || Date.now() >= roundEndsAt.current) return;
-    answered.current = true;
-    const responseMs = Date.now() - startedAt.current;
-    if (responseMs >= QUESTION_MS) {
-      missQuestion(currentVerb);
-      return;
-    }
-    const earned = choice.isCorrect ? pointsFor(responseMs) : 0;
-    setAnsweredCount((count) => count + 1);
-    if (choice.isCorrect) {
-      setCorrectCount((count) => count + 1);
-      setScore((current) => current + earned);
-      setFeedback('correct');
-    } else {
-      setMistakes((current) => [
-        ...current,
-        { french: currentVerb.french, answer: choice.label, correct: getForms(currentVerb) },
-      ]);
-      setFeedback('wrong');
-    }
-    recordAttempt(currentVerb, choice.isCorrect, responseMs);
-    advanceQuestion.current();
-  }
-
   const progress = 1 - remainingMs / ROUND_MS;
+  const questionProgress = 1 - questionRemainingMs / QUESTION_MS;
   const listVerbs = verbs.filter((verb) => verb.list === selectedList);
   const meanTime = (verb: Verb) => {
     const stat = stats[verb.id];
@@ -281,8 +443,9 @@ export default function App() {
             })}
           </View>
 
+          {speechError !== '' && <Text style={styles.speechError}>{speechError}</Text>}
           <Pressable style={styles.startButton} onPress={() => startRound(selectedList)}>
-            <Text style={styles.startButtonText}>Lancer le quiz · liste {String(selectedList).padStart(2, '0')}</Text>
+            <Text style={styles.startButtonText}>Démarrer le mode oral · liste {String(selectedList).padStart(2, '0')}</Text>
             <Text style={styles.startButtonArrow}>→</Text>
           </Pressable>
           <Pressable style={styles.secondaryButton} onPress={() => setScreen('revision')}>
@@ -306,7 +469,7 @@ export default function App() {
             })}
           </View>
 
-          <Text style={styles.footerText}>30 SECONDES · 4 PROPOSITIONS</Text>
+          <Text style={styles.footerText}>30 SECONDES · RÉPONSES ORALES EN ANGLAIS</Text>
         </ScrollView>
       )}
 
@@ -314,26 +477,30 @@ export default function App() {
         <View style={styles.quizScreen}>
           <View style={styles.quizHeader}>
             <Pressable style={styles.backButton} onPress={() => setScreen('home')}><Text style={styles.backGlyph}>‹</Text></Pressable>
-            <View style={styles.quizHeaderLabel}><Text style={styles.brand}>LISTE {String(selectedList).padStart(2, '0')}</Text><Text style={styles.quizSubhead}>{listName(selectedList)}</Text></View>
+            <View style={styles.quizHeaderLabel}><Text style={styles.brand}>MODE ORAL · LISTE {String(selectedList).padStart(2, '0')}</Text><Text style={styles.quizSubhead}>{listName(selectedList)}</Text></View>
           </View>
           <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.min(100, progress * 100)}%` }]} /></View>
           <View style={styles.quizMeta}><Text style={styles.quizMetaLabel}>QUESTION {String(questionIndex + 1).padStart(2, '0')}</Text><Text style={styles.quizScore}>{score} PTS</Text></View>
-            <View style={styles.quizBody}>
+          <View style={styles.quizBody}>
             <View style={styles.questionBlock}>
               <Text style={styles.questionPrompt}>Comment dit-on</Text>
               <Text style={styles.questionWord}>{currentVerb.french}</Text>
-              <Text style={styles.questionHint}>en anglais ?</Text>
+              <Text style={styles.questionHint}>en anglais ? Donne les trois formes.</Text>
             </View>
-              <View style={styles.options}>
-                {choices.map((choice, index) => (
-                  <Pressable key={`${questionIndex}-${choice.key}`} style={styles.optionButton} onPress={() => chooseAnswer(choice)}>
-                    <Text style={styles.optionIndex}>{String.fromCharCode(65 + index)}</Text>
-                    <Text style={styles.optionText}>{choice.label}</Text>
-                  </Pressable>
-                ))}
+            <View style={styles.voiceAnswer}>
+              <View style={[styles.microphoneMark, isListening && styles.microphoneMarkActive]}>
+                <Text style={styles.microphoneGlyph}>●</Text>
               </View>
+              <Text style={styles.voiceStatus}>{isListening ? 'À toi de parler' : 'Préparation du micro…'}</Text>
+              <Text style={styles.voiceInstruction}>Base verbale · prétérit · participe passé</Text>
+              <View style={styles.questionProgressTrack}>
+                <View style={[styles.questionProgressFill, { width: `${Math.min(100, questionProgress * 100)}%` }]} />
+              </View>
+              <Text style={styles.transcriptText}>{transcript || 'La transcription apparaîtra ici'}</Text>
+            </View>
+            {speechError !== '' && <Text style={styles.speechError}>{speechError}</Text>}
           </View>
-          <View style={styles.quizFooter}><Text style={styles.quizFooterLabel}>BONNE RÉPONSE</Text><Text style={styles.pointsLegend}>‹1s  +5  ·  ‹1,2s  +3  ·  ‹1,4s  +2  ·  ‹5s  +1</Text></View>
+          <View style={styles.quizFooter}><Text style={styles.quizFooterLabel}>BARÈME</Text><Text style={styles.pointsLegend}>‹1s  +5  ·  ‹1,2s  +3  ·  ‹1,4s  +2  ·  ‹5s  +1</Text></View>
         </View>
       )}
 
@@ -375,16 +542,16 @@ export default function App() {
             <View style={styles.resultMetric}><Text style={styles.resultMetricValue}>{correctCount}/{answeredCount}</Text><Text style={styles.resultMetricLabel}>BONNES RÉPONSES</Text></View>
             <View style={styles.resultMetric}><Text style={styles.resultMetricValue}>{answeredCount ? `${Math.round((correctCount / answeredCount) * 100)}%` : '0%'}</Text><Text style={styles.resultMetricLabel}>DE RÉUSSITE</Text></View>
           </View>
-          {mistakes.length > 0 && <View style={styles.reviewBlock}><Text style={styles.reviewTitle}>À revoir</Text>{mistakes.slice(-6).map((mistake, index) => <View key={`${mistake.french}-${index}`} style={styles.reviewRow}><Text style={styles.reviewFrench}>{mistake.french}</Text><Text style={styles.reviewAnswer}>Ta réponse : {mistake.answer}</Text><Text style={styles.reviewForms}>Réponse : {mistake.correct}</Text></View>)}</View>}
+          {roundAnswers.length > 0 && <View style={styles.reviewBlock}><Text style={styles.reviewTitle}>Tes réponses</Text>{roundAnswers.map((answer, index) => <View key={`${answer.french}-${index}`} style={styles.reviewRow}><Text style={styles.reviewFrench}>{answer.french}</Text><Text style={[styles.reviewAnswer, answer.answer.trim().toLocaleLowerCase('fr-FR') !== 'pas de réponse' && answer.matchedForms > 0 ? styles.correctAnswer : styles.incorrectAnswer]}>Ta réponse : {answer.answer}</Text><Text style={styles.reviewForms}>Temps : {answer.responseMs} ms</Text>{!answer.isCorrect && <Text style={styles.reviewForms}>{answer.matchedForms}/3 formes reconnues · +{answer.pointsEarned} pt{answer.pointsEarned === 1 ? '' : 's'} · attendu : {answer.correct}</Text>}</View>)}</View>}
           <Pressable style={styles.startButton} onPress={() => startRound(selectedList)}><Text style={styles.startButtonText}>Rejouer cette liste</Text><Text style={styles.startButtonArrow}>↻</Text></Pressable>
           <Pressable style={styles.secondaryButton} onPress={() => setScreen('home')}><Text style={styles.secondaryButtonText}>Choisir une autre liste</Text></Pressable>
         </ScrollView>
       )}
 
       {feedback && (
-        <View pointerEvents="none" style={[styles.feedbackToast, feedback === 'correct' ? styles.feedbackCorrect : styles.feedbackWrong]}>
-          <Text style={styles.feedbackIcon}>{feedback === 'correct' ? '✓' : '×'}</Text>
-          <Text style={styles.feedbackText}>{feedback === 'correct' ? 'Exact !' : 'À revoir'}</Text>
+        <View pointerEvents="none" style={[styles.feedbackToast, feedback === 'correct' ? styles.feedbackCorrect : feedback === 'partial' ? styles.feedbackPartial : styles.feedbackWrong]}>
+          <Text style={[styles.feedbackIcon, feedback === 'partial' && styles.feedbackPartialText]}>{feedback === 'correct' ? '✓' : feedback === 'partial' ? '+' : '×'}</Text>
+          <Text style={[styles.feedbackText, feedback === 'partial' && styles.feedbackPartialText]}>{feedback === 'correct' ? 'Exact !' : feedback === 'partial' ? 'Crédit partiel' : 'À revoir'}</Text>
         </View>
       )}
     </SafeAreaView>
@@ -450,18 +617,26 @@ const styles = StyleSheet.create({
   questionPrompt: { color: COLORS.muted, fontSize: 16 },
   questionWord: { width: '100%', marginTop: 5, color: COLORS.ink, fontSize: 36, lineHeight: 43, fontWeight: '900', textAlign: 'center' },
   questionHint: { marginTop: 4, color: COLORS.green, fontSize: 15, fontWeight: '700' },
-  options: { gap: 9 },
-  optionButton: { minHeight: 61, paddingHorizontal: 12, borderWidth: 1, borderColor: COLORS.line, backgroundColor: COLORS.white, flexDirection: 'row', alignItems: 'center' },
-  optionIndex: { width: 30, height: 30, marginRight: 12, color: COLORS.green, backgroundColor: COLORS.paleGreen, textAlign: 'center', textAlignVertical: 'center', fontSize: 11, fontWeight: '900', overflow: 'hidden', paddingTop: 8 },
-  optionText: { flex: 1, color: COLORS.ink, fontSize: 15, fontWeight: '700' },
+  voiceAnswer: { marginHorizontal: 8, marginTop: 18, padding: 20, alignItems: 'center', backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.line },
+  microphoneMark: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: 22, backgroundColor: COLORS.paleGreen },
+  microphoneMarkActive: { backgroundColor: COLORS.lime },
+  microphoneGlyph: { color: COLORS.green, fontSize: 17 },
+  voiceStatus: { marginTop: 11, color: COLORS.ink, fontSize: 16, fontWeight: '900' },
+  voiceInstruction: { marginTop: 5, color: COLORS.muted, fontSize: 11, textAlign: 'center' },
+  questionProgressTrack: { width: '100%', height: 4, marginTop: 17, backgroundColor: COLORS.line },
+  questionProgressFill: { height: 4, backgroundColor: COLORS.green },
+  transcriptText: { minHeight: 38, marginTop: 12, color: COLORS.green, fontSize: 14, fontWeight: '700', textAlign: 'center', textAlignVertical: 'center' },
+  speechError: { marginTop: 12, color: COLORS.red, fontSize: 12, lineHeight: 17 },
   quizFooter: { marginTop: 18, alignItems: 'center' },
   quizFooterLabel: { color: COLORS.muted, fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
   pointsLegend: { marginTop: 7, color: COLORS.ink, fontSize: 9, fontWeight: '700' },
   feedbackToast: { position: 'absolute', bottom: 24, left: 22, right: 22, minHeight: 54, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 9 },
   feedbackCorrect: { backgroundColor: COLORS.green },
+  feedbackPartial: { backgroundColor: COLORS.lime },
   feedbackWrong: { backgroundColor: COLORS.red },
   feedbackIcon: { color: COLORS.white, fontSize: 25, fontWeight: '900' },
   feedbackText: { color: COLORS.white, fontSize: 14, fontWeight: '800' },
+  feedbackPartialText: { color: COLORS.ink },
   resultScreen: { flexGrow: 1, paddingHorizontal: 22, paddingTop: 36, paddingBottom: 32 },
   resultTitle: { marginTop: 14, color: COLORS.ink, fontSize: 38, lineHeight: 41, fontWeight: '900' },
   resultScore: { width: 132, height: 132, marginTop: 25, backgroundColor: COLORS.lime, alignItems: 'center', justifyContent: 'center' },
@@ -476,6 +651,8 @@ const styles = StyleSheet.create({
   reviewRow: { paddingVertical: 9, borderTopWidth: 1, borderTopColor: COLORS.line },
   reviewFrench: { color: COLORS.red, fontSize: 12, fontWeight: '800' },
   reviewAnswer: { marginTop: 4, color: COLORS.muted, fontSize: 11 },
+  correctAnswer: { color: COLORS.green, fontWeight: '800' },
+  incorrectAnswer: { color: COLORS.red, fontWeight: '800' },
   reviewForms: { marginTop: 4, color: COLORS.ink, fontSize: 12 },
   secondaryButton: { minHeight: 50, marginTop: 9, alignItems: 'center', justifyContent: 'center', borderWidth: 1, borderColor: COLORS.line },
   secondaryButtonText: { color: COLORS.ink, fontSize: 13, fontWeight: '800' },
