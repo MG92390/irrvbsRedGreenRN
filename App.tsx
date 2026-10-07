@@ -37,6 +37,7 @@ const COLORS = {
 
 type Choice = { key: string; label: string; isCorrect: boolean };
 type Mistake = { french: string; answer: string; correct: string };
+type ExerciseMode = 1 | 2;
 
 function shuffle<T>(items: T[]): T[] {
   const result = [...items];
@@ -87,6 +88,7 @@ function listName(id: number): string {
 export default function App() {
   const [screen, setScreen] = useState<'home' | 'quiz' | 'revision' | 'result'>('home');
   const [selectedList, setSelectedList] = useState(1);
+  const [exerciseMode, setExerciseMode] = useState<ExerciseMode>(1);
   const [stats, setStats] = useState<Stats>({});
   const [bestScores, setBestScores] = useState<BestScores>({});
   const [deck, setDeck] = useState<Verb[]>([]);
@@ -225,6 +227,27 @@ export default function App() {
     advanceQuestion.current();
   }
 
+  function assessAnswer(knowsAnswer: boolean) {
+    if (answered.current || !currentVerb || Date.now() >= roundEndsAt.current) return;
+    answered.current = true;
+    const responseMs = Math.min(QUESTION_MS, Date.now() - startedAt.current);
+    const earned = knowsAnswer ? pointsFor(responseMs) : 0;
+    setAnsweredCount((count) => count + 1);
+    if (knowsAnswer) {
+      setCorrectCount((count) => count + 1);
+      setScore((current) => current + earned);
+      setFeedback('correct');
+    } else {
+      setMistakes((current) => [
+        ...current,
+        { french: currentVerb.french, answer: 'Je passe', correct: getForms(currentVerb) },
+      ]);
+      setFeedback('wrong');
+    }
+    recordAttempt(currentVerb, knowsAnswer, responseMs);
+    advanceQuestion.current();
+  }
+
   const progress = 1 - remainingMs / ROUND_MS;
   const listVerbs = verbs.filter((verb) => verb.list === selectedList);
   const meanTime = (verb: Verb) => {
@@ -251,7 +274,20 @@ export default function App() {
           </View>
 
           <View style={styles.sectionHeading}>
-            <View><Text style={styles.sectionTitle}>Choisis ta liste</Text><Text style={styles.sectionSubtitle}>Sélectionne une liste pour voir tes verbes.</Text></View>
+            <View style={styles.sectionHeadingCopy}><Text style={styles.sectionTitle}>Choisis ta liste</Text><Text style={styles.sectionSubtitle}>Sélectionne une liste pour voir tes verbes.</Text></View>
+            <View style={styles.modeSwitch} accessibilityRole="tablist">
+              {([1, 2] as const).map((mode) => (
+                <Pressable
+                  key={mode}
+                  accessibilityRole="tab"
+                  accessibilityState={{ selected: exerciseMode === mode }}
+                  onPress={() => setExerciseMode(mode)}
+                  style={[styles.modeOption, exerciseMode === mode && styles.modeOptionActive]}
+                >
+                  <Text style={[styles.modeOptionText, exerciseMode === mode && styles.modeOptionTextActive]}>Mode {mode}</Text>
+                </Pressable>
+              ))}
+            </View>
           </View>
 
           <View style={styles.listGrid}>
@@ -314,7 +350,7 @@ export default function App() {
         <View style={styles.quizScreen}>
           <View style={styles.quizHeader}>
             <Pressable style={styles.backButton} onPress={() => setScreen('home')}><Text style={styles.backGlyph}>‹</Text></Pressable>
-            <View style={styles.quizHeaderLabel}><Text style={styles.brand}>LISTE {String(selectedList).padStart(2, '0')}</Text><Text style={styles.quizSubhead}>{listName(selectedList)}</Text></View>
+            <View style={styles.quizHeaderLabel}><Text style={styles.brand}>MODE {exerciseMode} · LISTE {String(selectedList).padStart(2, '0')}</Text><Text style={styles.quizSubhead}>{listName(selectedList)}</Text></View>
           </View>
           <View style={styles.progressTrack}><View style={[styles.progressFill, { width: `${Math.min(100, progress * 100)}%` }]} /></View>
           <View style={styles.quizMeta}><Text style={styles.quizMetaLabel}>QUESTION {String(questionIndex + 1).padStart(2, '0')}</Text><Text style={styles.quizScore}>{score} PTS</Text></View>
@@ -324,14 +360,37 @@ export default function App() {
               <Text style={styles.questionWord}>{currentVerb.french}</Text>
               <Text style={styles.questionHint}>en anglais ?</Text>
             </View>
-              <View style={styles.options}>
-                {choices.map((choice, index) => (
-                  <Pressable key={`${questionIndex}-${choice.key}`} style={styles.optionButton} onPress={() => chooseAnswer(choice)}>
-                    <Text style={styles.optionIndex}>{String.fromCharCode(65 + index)}</Text>
-                    <Text style={styles.optionText}>{choice.label}</Text>
+              {exerciseMode === 1 ? (
+                <View style={styles.options}>
+                  {choices.map((choice, index) => (
+                    <Pressable key={`${questionIndex}-${choice.key}`} style={styles.optionButton} onPress={() => chooseAnswer(choice)}>
+                      <Text style={styles.optionIndex}>{String.fromCharCode(65 + index)}</Text>
+                      <Text style={styles.optionText}>{choice.label}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : (
+                <View style={styles.selfAssessmentActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Je ne connais pas, passer cette question"
+                    style={[styles.selfAssessmentButton, styles.selfAssessmentPass]}
+                    onPress={() => assessAnswer(false)}
+                  >
+                    <Text style={[styles.selfAssessmentGlyph, styles.selfAssessmentPassGlyph]}>×</Text>
+                    <Text style={[styles.selfAssessmentLabel, styles.selfAssessmentPassGlyph]}>Je passe</Text>
                   </Pressable>
-                ))}
-              </View>
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel="Je connais la réponse"
+                    style={[styles.selfAssessmentButton, styles.selfAssessmentKnow]}
+                    onPress={() => assessAnswer(true)}
+                  >
+                    <Text style={[styles.selfAssessmentGlyph, styles.selfAssessmentKnowGlyph]}>✓</Text>
+                    <Text style={[styles.selfAssessmentLabel, styles.selfAssessmentKnowGlyph]}>Je connais</Text>
+                  </Pressable>
+                </View>
+              )}
           </View>
           <View style={styles.quizFooter}><Text style={styles.quizFooterLabel}>BONNE RÉPONSE</Text><Text style={styles.pointsLegend}>‹1s  +5  ·  ‹1,2s  +3  ·  ‹1,4s  +2  ·  ‹5s  +1</Text></View>
         </View>
@@ -406,9 +465,15 @@ const styles = StyleSheet.create({
   heroStamp: { width: 62, height: 62, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.lime },
   heroStampNumber: { color: COLORS.ink, fontSize: 25, lineHeight: 27, fontWeight: '900' },
   heroStampLabel: { color: COLORS.ink, fontSize: 8, fontWeight: '900', letterSpacing: 1 },
-  sectionHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 27, marginBottom: 13 },
+  sectionHeading: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8, marginTop: 27, marginBottom: 13 },
+  sectionHeadingCopy: { flex: 1 },
   sectionTitle: { color: COLORS.ink, fontSize: 21, fontWeight: '900' },
   sectionSubtitle: { marginTop: 4, color: COLORS.muted, fontSize: 11 },
+  modeSwitch: { flexDirection: 'row', borderWidth: 1, borderColor: COLORS.line, backgroundColor: COLORS.white },
+  modeOption: { minWidth: 64, minHeight: 36, paddingHorizontal: 9, alignItems: 'center', justifyContent: 'center' },
+  modeOptionActive: { backgroundColor: COLORS.green },
+  modeOptionText: { color: COLORS.ink, fontSize: 11, fontWeight: '800' },
+  modeOptionTextActive: { color: COLORS.white },
   listGrid: { flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between', rowGap: 10 },
   listCard: { width: '48.4%', minHeight: 144, padding: 12, backgroundColor: COLORS.white, borderWidth: 1, borderColor: COLORS.line, justifyContent: 'space-between' },
   listCardActive: { backgroundColor: COLORS.lime, borderColor: COLORS.lime },
@@ -454,6 +519,14 @@ const styles = StyleSheet.create({
   optionButton: { minHeight: 61, paddingHorizontal: 12, borderWidth: 1, borderColor: COLORS.line, backgroundColor: COLORS.white, flexDirection: 'row', alignItems: 'center' },
   optionIndex: { width: 30, height: 30, marginRight: 12, color: COLORS.green, backgroundColor: COLORS.paleGreen, textAlign: 'center', textAlignVertical: 'center', fontSize: 11, fontWeight: '900', overflow: 'hidden', paddingTop: 8 },
   optionText: { flex: 1, color: COLORS.ink, fontSize: 15, fontWeight: '700' },
+  selfAssessmentActions: { flexDirection: 'row', justifyContent: 'center', gap: 16, marginTop: 28 },
+  selfAssessmentButton: { width: 116, height: 116, alignItems: 'center', justifyContent: 'center', borderWidth: 1 },
+  selfAssessmentPass: { backgroundColor: COLORS.paleRed, borderColor: COLORS.red },
+  selfAssessmentKnow: { backgroundColor: COLORS.paleGreen, borderColor: COLORS.green },
+  selfAssessmentGlyph: { fontSize: 48, lineHeight: 54, fontWeight: '700' },
+  selfAssessmentPassGlyph: { color: COLORS.red },
+  selfAssessmentKnowGlyph: { color: COLORS.green },
+  selfAssessmentLabel: { marginTop: 4, fontSize: 12, fontWeight: '800' },
   quizFooter: { marginTop: 18, alignItems: 'center' },
   quizFooterLabel: { color: COLORS.muted, fontSize: 8, fontWeight: '900', letterSpacing: 1.2 },
   pointsLegend: { marginTop: 7, color: COLORS.ink, fontSize: 9, fontWeight: '700' },
